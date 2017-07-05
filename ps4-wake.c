@@ -37,9 +37,11 @@
 #define _DST_PORT           987
 #define _PROBES             6
 
-#define _DDP_VERSION        "00010010"
+#define _DDP_VERSION        "00020020"
 #define _DDP_CLIENTTYPE     "vr"
 #define _DDP_AUTHTYPE       "R"
+#define _DDP_MODEL          "m"
+#define _DDP_APPTYPE        "r"
 
 #define _EXIT_SUCCESS       0
 #define _EXIT_BADOPTION     1
@@ -83,7 +85,7 @@ static int ddp_parse(char *buffer, struct ddp_reply *reply)
             token[2] == 'T' && token[3] == 'P') {
             for (p = token + 8; *p == ' '; p++);
             for (c = p; isdigit(*p); p++);
-            p = '\0'; reply->code = (short)atoi(c);
+            *p = '\0'; reply->code = (short)atoi(c);
             continue;
         }
 
@@ -406,8 +408,8 @@ int main(int argc, char *argv[])
     }
 
     sprintf(pkt_output,
-        "SRCH * HTTP/1.1\n"
-        "device-discovery-protocol-version:%s\n",
+        "SRCH * HTTP/1.1\r\n"
+        "device - discovery - protocol - version:%s\r\n\r\n",
         _DDP_VERSION);
 
     reply = malloc(sizeof(struct ddp_reply));
@@ -421,7 +423,7 @@ int main(int argc, char *argv[])
     int found_device = 0;
     for (int i = 0; i < probes; i++) {
         sa_remote.sin_port = htons(port_remote);
-        bytes = sendto(sd, pkt_output, strlen(pkt_output) + 1, 0,
+        bytes = sendto(sd, pkt_output, strlen(pkt_output), 0,
             (struct sockaddr *)&sa_remote, sizeof(struct sockaddr_in));
         if (bytes < 0) {
             fprintf(stderr, "Error writing packet: %s\n", strerror(errno));
@@ -485,9 +487,11 @@ int main(int argc, char *argv[])
         "WAKEUP * HTTP/1.1\n"
         "client-type:%s\n"
         "auth-type:%s\n"
+        "model:%s\n"
+        "app-type:%s\n"
         "user-credential:%s\n"
         "device-discovery-protocol-version:%s\n",
-        _DDP_CLIENTTYPE, _DDP_AUTHTYPE, cred, _DDP_VERSION);
+        _DDP_CLIENTTYPE, _DDP_AUTHTYPE, _DDP_MODEL, _DDP_APPTYPE, cred, _DDP_VERSION);
 
     if (verbose) fprintf(stderr, "Sending wake-up...\n");
 
