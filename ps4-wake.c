@@ -17,6 +17,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <getopt.h>
 #include <string.h>
 #include <errno.h>
@@ -32,6 +33,10 @@
 #include <ifaddrs.h>
 
 #include "sha1.h"
+#include <openssl/pem.h>
+#include <openssl/bio.h>
+#include <openssl/rsa.h>
+#include <openssl/aes.h>
 
 #define _VERSION            "1.0"
 #define _DST_PORT           987
@@ -40,7 +45,8 @@
 #define _DDP_VERSION        "00020020"
 #define _DDP_CLIENTTYPE     "vr"
 #define _DDP_AUTHTYPE       "R"
-#define _DDP_MODEL          "m"
+//#define _DDP_MODEL          "m"
+#define _DDP_MODEL          "w"
 #define _DDP_APPTYPE        "r"
 
 #define _EXIT_SUCCESS       0
@@ -51,6 +57,17 @@
 #define _EXIT_BADHOSTADDR   5
 #define _EXIT_DEVNOTFOUND   6
 #define _EXIT_HOSTNOTFOUND  7
+
+
+#define LOGIN_REQ 0x1e
+#define LOGIN_RSP 0x07
+#define HELLO_REQ 0x6f636370
+#define HANDSHAKE_REQ 0x20
+
+#define LOGIN_SUCCESS 0x00
+#define PASSCODE_NEEDED 0x14
+#define PIN_NEEDED 0x16
+#define PIN_INVALID 0x0e /* ?? */
 
 struct ddp_reply
 {
@@ -64,6 +81,93 @@ struct ddp_reply
     short host_request_port;
 };
 
+struct hello_request
+{
+    int32_t length;
+    int32_t type;
+    int32_t version;
+    uint8_t seed[16];
+};
+
+struct hello_response
+{
+    int32_t length;
+    int32_t type;
+    int32_t version;
+    uint8_t dummy[8];
+    uint8_t seed[16];
+};
+
+/* RSA pkcs8 public key */
+#define PUBLIC_KEY \
+"-----BEGIN PUBLIC KEY-----\n" \
+"MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxfAO/MDk5ovZpp7xlG9J\n" \
+"JKc4Sg4ztAz+BbOt6Gbhub02tF9bryklpTIyzM0v817pwQ3TCoigpxEcWdTykhDL\n" \
+"cGhAbcp6E7Xh8aHEsqgtQ/c+wY1zIl3fU//uddlB1XuipXthDv6emXsyyU/tJWqc\n" \
+"zy9HCJncLJeYo7MJvf2TE9nnlVm1x4flmD0k1zrvb3MONqoZbKb/TQVuVhBv7SM+\n" \
+"U5PSi3diXIx1Nnj4vQ8clRNUJ5X1tT9XfVmKQS1J513XNZ0uYHYRDzQYujpLWucu\n" \
+"ob7v50wCpUm3iKP1fYCixMP6xFm0jPYz1YQaMV35VkYwc40qgk3av0PDS+1G0dCm\n" \
+"swIDAQAB\n" \
+"-----END PUBLIC KEY-----"
+/*
+static const uint8_t public_key[] = 
+{
+  0xc5,0xf0,0x0e,0xfc,0xc0,0xe4,0xe6,0x8b,0xd9,0xa6,0x9e,0xf1,0x94,0x6f,0x49,0x24,
+  0xa7,0x38,0x4a,0x0e,0x33,0xb4,0x0c,0xfe,0x05,0xb3,0xad,0xe8,0x66,0xe1,0xb9,0xbd,
+  0x36,0xb4,0x5f,0x5b,0xaf,0x29,0x25,0xa5,0x32,0x32,0xcc,0xcd,0x2f,0xf3,0x5e,0xe9,
+  0xc1,0x0d,0xd3,0x0a,0x88,0xa0,0xa7,0x11,0x1c,0x59,0xd4,0xf2,0x92,0x10,0xcb,0x70,
+  0x68,0x40,0x6d,0xca,0x7a,0x13,0xb5,0xe1,0xf1,0xa1,0xc4,0xb2,0xa8,0x2d,0x43,0xf7,
+  0x3e,0xc1,0x8d,0x73,0x22,0x5d,0xdf,0x53,0xff,0xee,0x75,0xd9,0x41,0xd5,0x7b,0xa2,
+  0xa5,0x7b,0x61,0x0e,0xfe,0x9e,0x99,0x7b,0x32,0xc9,0x4f,0xed,0x25,0x6a,0x9c,0xcf,
+  0x2f,0x47,0x08,0x99,0xdc,0x2c,0x97,0x98,0xa3,0xb3,0x09,0xbd,0xfd,0x93,0x13,0xd9,
+  0xe7,0x95,0x59,0xb5,0xc7,0x87,0xe5,0x98,0x3d,0x24,0xd7,0x3a,0xef,0x6f,0x73,0x0e,
+  0x36,0xaa,0x19,0x6c,0xa6,0xff,0x4d,0x05,0x6e,0x56,0x10,0x6f,0xed,0x23,0x3e,0x53,
+  0x93,0xd2,0x8b,0x77,0x62,0x5c,0x8c,0x75,0x36,0x78,0xf8,0xbd,0x0f,0x1c,0x95,0x13,
+  0x54,0x27,0x95,0xf5,0xb5,0x3f,0x57,0x7d,0x59,0x8a,0x41,0x2d,0x49,0xe7,0x5d,0xd7,
+  0x35,0x9d,0x2e,0x60,0x76,0x11,0x0f,0x34,0x18,0xba,0x3a,0x4b,0x5a,0xe7,0x2e,0xa1,
+  0xbe,0xef,0xe7,0x4c,0x02,0xa5,0x49,0xb7,0x88,0xa3,0xf5,0x7d,0x80,0xa2,0xc4,0xc3,
+  0xfa,0xc4,0x59,0xb4,0x8c,0xf6,0x33,0xd5,0x84,0x1a,0x31,0x5d,0xf9,0x56,0x46,0x30,
+  0x73,0x8d,0x2a,0x82,0x4d,0xda,0xbf,0x43,0xc3,0x4b,0xed,0x46,0xd1,0xd0,0xa6,0xb3
+};*/
+
+
+ 
+struct handshake_request
+{
+    int32_t length;
+    int32_t type;
+    uint8_t key[256];
+    uint8_t seed[16];
+};
+
+struct handshake_response
+{
+    int32_t length;
+    int32_t type;
+    uint32_t unknown1;
+    uint32_t unknown2;
+};
+struct login_request
+{
+    uint32_t length;
+    uint32_t type;
+    uint32_t pass_code;
+    uint32_t magic_number;
+    uint8_t account_id[64];
+    uint8_t app_label[256];
+    uint8_t os_version[16];
+    uint8_t model[16];
+    uint8_t pin_code[16];
+};
+
+struct login_response
+{
+    uint32_t length;
+    uint32_t type;
+    uint32_t status;
+    uint32_t unknown2;
+};
+
 static char *buffer = NULL, *iface = NULL;
 static char *pkt_input, *pkt_output, *json_buffer;
 static char *host_remote = NULL, *cred = NULL;
@@ -71,6 +175,9 @@ static int rc, broadcast = 0, probe = 0, json = 0, verbose = 0, probes = _PROBES
 static int sd = -1;
 static short port_local = INADDR_ANY, port_remote = _DST_PORT;
 static struct ddp_reply *reply = NULL;
+static struct sockaddr_in sa_local, sa_remote;
+static int login=0, wakeup=0;
+static int sockfd = -1;
 
 static int ddp_parse(char *buffer, struct ddp_reply *reply)
 {
@@ -243,8 +350,10 @@ static void usage(int rc)
     fprintf(stderr, " Probe:\n");
     fprintf(stderr, "  -P, --probe\n    Probe network for devices.\n");
     fprintf(stderr, " Wake:\n");
-    fprintf(stderr, "  -W, --wake <user-credential>\n    Wake device using specified user credential.\n");
+    fprintf(stderr, "  -W, --wake\n    Wake device.\n");
     fprintf(stderr, " Options:\n");
+    fprintf(stderr, "  -c, --credential <user-credential>\n    use specified user credential (needed by wake and login).\n");
+    fprintf(stderr, "  -l, --login\n    login to the device.\n");
     fprintf(stderr, "  -B, --broadcast\n    Send broadcasts.\n");
     fprintf(stderr, "  -L, --local-port <port address>\n    Specifiy a local port address.\n");
     fprintf(stderr, "  -H, --remote-host <host address>\n    Specifiy a remote host address.\n");
@@ -255,9 +364,220 @@ static void usage(int rc)
 
     exit(rc);
 }
+static int ddp_send(const char* cmd)
+{
+    ssize_t bytes;
+    
+    sprintf(pkt_output,
+        "%s * HTTP/1.1\n"
+        "client-type:%s\n"
+        "auth-type:%s\n"
+        "model:%s\n"
+        "app-type:%s\n"
+        "user-credential:%s\n"
+        "device-discovery-protocol-version:%s\n",
+        cmd, _DDP_CLIENTTYPE, _DDP_AUTHTYPE, _DDP_MODEL, _DDP_APPTYPE, cred, _DDP_VERSION);
+
+    if (verbose) fprintf(stderr, "Sending %s...\n", cmd);
+
+    sa_remote.sin_port = htons(port_remote);
+    bytes = sendto(sd, pkt_output, strlen(pkt_output), 0,
+        (struct sockaddr *)&sa_remote, sizeof(struct sockaddr_in));
+    if (bytes < 0) {
+        fprintf(stderr, "Error writing packet: %s\n", strerror(errno));
+        return _EXIT_SOCKET;
+    }
+    return _EXIT_SUCCESS;
+}
+
+static RSA * createRSA(char * key,int public)
+{
+    RSA *rsa= NULL;
+    BIO *keybio ;
+    keybio = BIO_new_mem_buf(key, -1);
+    if (keybio==NULL)
+    {
+        printf( "Failed to create key BIO");
+        return NULL;
+    }
+    if(public)
+    {
+        rsa = PEM_read_bio_RSA_PUBKEY(keybio, &rsa,NULL, NULL);
+    }
+    else
+    {
+        rsa = PEM_read_bio_RSAPrivateKey(keybio, &rsa,NULL, NULL);
+    }
+ 
+    return rsa;
+}
+
+static int connect_device()
+{
+    int ret;
+    struct sockaddr_in dev_addr;
+    struct hello_response hello_rsp;
+    struct hello_request hello_req;
+    struct handshake_request handshake_req;
+    uint8_t iv[16];
+    uint8_t randomseed[16] = {0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00,
+                              0x00, 0x00, 0x00, 0x00};
+    //uint8_t buf[1024];
+    struct login_response login_rsp;
+    //struct handshake_response handshake_rsp;
+    
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) {
+        fprintf(stderr, "Error creating socket: %s\n", strerror(errno));
+        return _EXIT_SOCKET;
+    }
+    memset(&dev_addr, '0', sizeof(dev_addr)); 
+    dev_addr.sin_addr.s_addr  = sa_remote.sin_addr.s_addr;
+    dev_addr.sin_port = htons(997); 
+    dev_addr.sin_family = AF_INET;
+    if (verbose) fprintf(stderr, "Connecting...\n");
+   
+    ret = connect(sockfd, (struct sockaddr *)&dev_addr, sizeof(dev_addr));
+    if (ret < 0) {
+        fprintf(stderr, "Error connect: %s\n", strerror(errno));
+        return _EXIT_SOCKET;
+    }
+    if (verbose) fprintf(stderr, "Sending Hello\n");
+    
+    hello_req.length = sizeof(hello_req);
+    hello_req.type = HELLO_REQ;
+    hello_req.version = 0x20000;
+    memset(hello_req.seed, 0, sizeof(hello_req.seed));
+    ret = write(sockfd, (uint8_t*)&hello_req, sizeof(hello_req));
+    if (ret != sizeof(hello_req)) {
+        fprintf(stderr, "Error sending Hello, %s\n", strerror(errno));
+        return _EXIT_SOCKET;
+    }
+    ret = read(sockfd, &hello_rsp, sizeof(hello_rsp));
+    if (ret != sizeof(hello_rsp)) {
+        fprintf(stderr, "Error reading Hello response, %s\n", strerror(errno));
+        return _EXIT_SOCKET;
+    }
+    if (verbose) fprintf(stderr, "rsp: len=%d, type=0x%x, version=0x%x\n", hello_rsp.length, hello_rsp.type, hello_rsp.version);
+    if(hello_rsp.length != sizeof(hello_rsp))
+        fprintf(stderr, "Invalid hello response packet size\n");
+    
+    /* AES init */
+    
+    handshake_req.length = sizeof(handshake_req);
+    handshake_req.type = HANDSHAKE_REQ;
+    memcpy(handshake_req.seed, hello_rsp.seed, sizeof(hello_rsp.seed));
+    //memcpy(handshake_req.key, public_key, sizeof(public_key));
+    //AES_set_encrypt_key(randomseed, sizeof(randomseed)*8, &enc_key);
+    //AES_cbc_encrypt(public_key, handshake_req.key, sizeof(public_key), &enc_key, hello_rsp.seed, AES_ENCRYPT);
+    
+    
+    RSA * rsa = createRSA(PUBLIC_KEY, 1);
+    ret = RSA_public_encrypt(sizeof(randomseed),randomseed, handshake_req.key, rsa, RSA_PKCS1_OAEP_PADDING);
+    if(ret != 256) {
+        fprintf(stderr, "encrypt failed %d\n", ret);
+        return _EXIT_SOCKET;
+    }
+    //memcpy(handshake_req.key, seed_crypted, sizeof(seed_crypted));
+    int i;
+    /*for(i=0;i<sizeof(handshake_req.key);i++)
+		printf("%02x", ((uint8_t*)&handshake_req.key)[i]);
+	printf("\n");*/
+    if (verbose) fprintf(stderr, "Sending Handshake\n");
+    
+    ret = write(sockfd, &handshake_req, sizeof(handshake_req));
+    if (ret != sizeof(handshake_req)) {
+        fprintf(stderr, "Error sending handshake, %s\n", strerror(errno));
+        return _EXIT_SOCKET;
+    }
+    /*ret = read(sockfd, (uint8_t*)&handshake_rsp, sizeof(handshake_rsp));
+    if (ret != sizeof(handshake_rsp)) {
+        fprintf(stderr, "Error reading handshake response, %s\n", strerror(errno));
+        return _EXIT_SOCKET;
+    }*/
+    
+    AES_KEY   dec_key;
+    AES_set_decrypt_key(randomseed, sizeof(randomseed)*8, &dec_key);
+    /*memcpy(iv, hello_rsp.seed, sizeof(iv));
+    AES_cbc_encrypt((uint8_t*)&handshake_rsp, (uint8_t*)&handshake_rsp, sizeof(handshake_rsp), &dec_key, iv, AES_DECRYPT);
+    if (verbose) fprintf(stderr, "handshake response %x, %x\n", handshake_rsp.unknown1, handshake_rsp.unknown2);*/
+    struct login_request login_req;
+    
+    login_req.length = sizeof(login_req);
+    login_req.type = LOGIN_REQ;
+    login_req.pass_code = 0x00;
+    login_req.magic_number = 0x00000201;
+    strncpy((char*)login_req.account_id, cred, 64);
+    strncpy((char*)login_req.app_label, "Playstation", 256);
+    strncpy((char*)login_req.os_version, "4.4", 16);
+    strncpy((char*)login_req.model, "PS4 Waker", 16);
+    memset(login_req.pin_code, 0, 16);
+    //memcpy(login_req.pin_code, "3631326562326400", 16);
+    //strncpy((char*)login_req.pin_code, "612eb2d", 16);
+    AES_KEY   enc_key;
+    AES_set_encrypt_key(randomseed, sizeof(randomseed)*8, &enc_key);
+    memcpy(iv, hello_rsp.seed, sizeof(iv));
+    AES_cbc_encrypt((uint8_t*)&login_req, (uint8_t*)&login_req, sizeof(login_req), &enc_key, iv, AES_ENCRYPT);
+    
+    printf("Seed: ");
+    for(i=0;i<sizeof(hello_rsp.seed);i++)
+		printf("%02x ", ((uint8_t*)&hello_rsp.seed)[i]);
+	printf("\n");
+    
+    if (verbose) fprintf(stderr, "Sending login\n");
+    
+    ret = write(sockfd, &login_req, sizeof(login_req));
+    if (ret != sizeof(login_req)) {
+        fprintf(stderr, "Error sending login, %s\n", strerror(errno));
+        return _EXIT_SOCKET;
+    }
+    
+    ret = read(sockfd, (uint8_t*)&login_rsp, sizeof(login_rsp));
+    if (ret <=0) {
+        fprintf(stderr, "Error reading login response, %s\n", strerror(errno));
+        return _EXIT_SOCKET;
+    }
+    /*for(i=0;i<sizeof(login_rsp);i++)
+		printf("%02x", ((uint8_t*)&login_rsp)[i]);
+	printf("\n");*/
+    memcpy(iv, hello_rsp.seed, sizeof(iv));
+    AES_cbc_encrypt((uint8_t*)&login_rsp, (uint8_t*)&login_rsp, sizeof(login_rsp), &dec_key, iv, AES_DECRYPT);
+    
+    if(login_rsp.length != sizeof(login_rsp))
+		fprintf(stderr, "Invalid login response size\n");
+	if(login_rsp.type != LOGIN_RSP)
+		fprintf(stderr, "Invalid login response type\n");
+	
+	switch(login_rsp.status)
+	{
+		case LOGIN_SUCCESS:
+			fprintf(stderr, "login success\n");
+		break;
+		case PASSCODE_NEEDED:
+			fprintf(stderr, "passcode needed\n");
+			return _EXIT_NOUSERCRED;
+		case PIN_NEEDED:
+			fprintf(stderr, "pincode needed\n");
+			return _EXIT_NOUSERCRED;
+		case PIN_INVALID:
+			fprintf(stderr, "pincode invalid?\n");
+			return _EXIT_NOUSERCRED;
+		default:
+			fprintf(stderr, "Unknown error code %x\n", login_rsp.status);
+			return _EXIT_SOCKET;
+	}
+    while(1)
+    {
+		sleep(2);
+	}
+    return _EXIT_SUCCESS;
+}
 
 int main(int argc, char *argv[])
 {
+    int ret = _EXIT_SUCCESS;
     atexit(onexit);
 
     long page_size = getpagesize();
@@ -282,6 +602,8 @@ int main(int argc, char *argv[])
         { "json", 0, 0, 'j' },
         { "verbose", 0, 0, 'v' },
         { "help", 0, 0, 'h' },
+        { "login", 0, 0, 'l' },
+        { "credential", 0, 0, 'c' },
 
         { NULL, 0, 0, 0 }
     };
@@ -289,13 +611,19 @@ int main(int argc, char *argv[])
     for (optind = 1 ;; ) {
         int o = 0;
         if ((rc = getopt_long(argc, argv,
-            "PW:BL:H:R:I:jvh?", options, &o)) == -1) break;
+            "PWBL:H:R:I:jvh?lc:", options, &o)) == -1) break;
         switch (rc) {
         case 'P':
             probe = 1;
             break;
-        case 'W':
+        case 'c':
             cred = strdup(optarg);
+            break;
+        case 'W':
+            wakeup = 1;
+            break;
+        case 'l':
+            login = 1;
             break;
         case 'B':
             broadcast = 1;
@@ -343,7 +671,7 @@ int main(int argc, char *argv[])
         return _EXIT_BADHOSTADDR;
     }
 
-    struct sockaddr_in sa_local, sa_remote;
+    //struct sockaddr_in sa_local, sa_remote;
 
     memset(&sa_local, 0, sizeof(struct sockaddr_in));
     memset(&sa_remote, 0, sizeof(struct sockaddr_in));
@@ -456,8 +784,8 @@ int main(int argc, char *argv[])
     else {
         fprintf(stderr, "Device found");
         if (verbose) {
-            fprintf(stderr, ": %s [%s/%s]",
-                reply->host_name, reply->host_type, reply->host_id);
+            fprintf(stderr, ": %s(%s) [%s/%s]",
+                reply->host_name, inet_ntoa(sa_remote.sin_addr), reply->host_type, reply->host_id);
             switch (reply->code) {
             case 200:
                 if (reply->running_app_name != NULL) {
@@ -482,28 +810,19 @@ int main(int argc, char *argv[])
 
     if (probe)
         return _EXIT_SUCCESS;
-
-    sprintf(pkt_output,
-        "WAKEUP * HTTP/1.1\n"
-        "client-type:%s\n"
-        "auth-type:%s\n"
-        "model:%s\n"
-        "app-type:%s\n"
-        "user-credential:%s\n"
-        "device-discovery-protocol-version:%s\n",
-        _DDP_CLIENTTYPE, _DDP_AUTHTYPE, _DDP_MODEL, _DDP_APPTYPE, cred, _DDP_VERSION);
-
-    if (verbose) fprintf(stderr, "Sending wake-up...\n");
-
-    sa_remote.sin_port = htons(port_remote);
-    bytes = sendto(sd, pkt_output, strlen(pkt_output), 0,
-        (struct sockaddr *)&sa_remote, sizeof(struct sockaddr_in));
-    if (bytes < 0) {
-        fprintf(stderr, "Error writing packet: %s\n", strerror(errno));
-        return _EXIT_SOCKET;
+    if(wakeup) {
+        ret = ddp_send("WAKEUP");
+        if(ret != _EXIT_SUCCESS)
+            return ret;
+        ret = ddp_send("LAUNCH");
     }
-
-    return _EXIT_SUCCESS;
+    if(login) {
+        sleep(1);
+        connect_device();
+    }
+    if(sockfd >= 0)
+        close(sockfd);
+    return ret;
 }
 
 // vi: expandtab shiftwidth=4 softtabstop=4 tabstop=4
