@@ -38,16 +38,18 @@
 #include <openssl/rsa.h>
 #include <openssl/aes.h>
 
+#include <sys/random.h>
+
+
 #define _VERSION            "1.0"
 #define _DST_PORT           987
 #define _PROBES             6
 
 #define _DDP_VERSION        "00020020"
-#define _DDP_CLIENTTYPE     "vr"
-#define _DDP_AUTHTYPE       "R"
-//#define _DDP_MODEL          "m"
-#define _DDP_MODEL          "w"
-#define _DDP_APPTYPE        "r"
+#define _DDP_CLIENTTYPE     "a"
+#define _DDP_AUTHTYPE       "C"
+#define _DDP_MODEL          "a"
+#define _DDP_APPTYPE        "c"
 
 #define _EXIT_SUCCESS       0
 #define _EXIT_BADOPTION     1
@@ -63,6 +65,8 @@
 #define LOGIN_RSP 0x07
 #define HELLO_REQ 0x6f636370
 #define HANDSHAKE_REQ 0x20
+#define STATUS_REQ 0x14
+#define STANDBY_REQ 0x1a
 
 #define LOGIN_SUCCESS 0x00
 #define PASSCODE_NEEDED 0x14
@@ -83,17 +87,17 @@ struct ddp_reply
 
 struct hello_request
 {
-    int32_t length;
-    int32_t type;
-    int32_t version;
+    uint32_t length;
+    uint32_t type;
+    uint32_t version;
     uint8_t seed[16];
 };
 
 struct hello_response
 {
-    int32_t length;
-    int32_t type;
-    int32_t version;
+    uint32_t length;
+    uint32_t type;
+    uint32_t version;
     uint8_t dummy[8];
     uint8_t seed[16];
 };
@@ -134,30 +138,23 @@ static const uint8_t public_key[] =
  
 struct handshake_request
 {
-    int32_t length;
-    int32_t type;
+    uint32_t length;
+    uint32_t type;
     uint8_t key[256];
     uint8_t seed[16];
 };
 
-struct handshake_response
-{
-    int32_t length;
-    int32_t type;
-    uint32_t unknown1;
-    uint32_t unknown2;
-};
 struct login_request
 {
     uint32_t length;
     uint32_t type;
-    uint32_t pass_code;
+    uint32_t pin_code;
     uint32_t magic_number;
     uint8_t account_id[64];
     uint8_t app_label[256];
     uint8_t os_version[16];
     uint8_t model[16];
-    uint8_t pin_code[16];
+    uint8_t pass_code[16];
 };
 
 struct login_response
@@ -168,16 +165,40 @@ struct login_response
     uint32_t unknown2;
 };
 
+struct status_request
+{
+    uint32_t length;
+    uint32_t type;
+    uint32_t status;
+};
+
+struct standby_request
+{
+    uint32_t length;
+    uint32_t type;
+    uint8_t dummy[8];
+};
+
+
+struct standby_response
+{
+    uint32_t length;
+    uint32_t type;
+};
+
 static char *buffer = NULL, *iface = NULL;
 static char *pkt_input, *pkt_output, *json_buffer;
 static char *host_remote = NULL, *cred = NULL;
-static int rc, broadcast = 0, probe = 0, json = 0, verbose = 0, probes = _PROBES;
+static int rc, broadcast = 0, probe = 0, json = 0, verbose = 0;
 static int sd = -1;
 static short port_local = INADDR_ANY, port_remote = _DST_PORT;
 static struct ddp_reply *reply = NULL;
 static struct sockaddr_in sa_local, sa_remote;
-static int login=0, wakeup=0;
+static int login=0, wakeup=0, standby=0;
 static int sockfd = -1;
+static long page_size;
+static uint8_t randomseed[16];
+static uint8_t seed[16];
 
 static int ddp_parse(char *buffer, struct ddp_reply *reply)
 {
@@ -351,6 +372,8 @@ static void usage(int rc)
     fprintf(stderr, "  -P, --probe\n    Probe network for devices.\n");
     fprintf(stderr, " Wake:\n");
     fprintf(stderr, "  -W, --wake\n    Wake device.\n");
+    fprintf(stderr, " Standby:\n");
+    fprintf(stderr, "  -S, --standby\n    put the device in standby mode.\n");
     fprintf(stderr, " Options:\n");
     fprintf(stderr, "  -c, --credential <user-credential>\n    use specified user credential (needed by wake and login).\n");
     fprintf(stderr, "  -l, --login\n    login to the device.\n");
@@ -415,18 +438,11 @@ static RSA * createRSA(char * key,int public)
 static int connect_device()
 {
     int ret;
+    int i;
     struct sockaddr_in dev_addr;
     struct hello_response hello_rsp;
     struct hello_request hello_req;
     struct handshake_request handshake_req;
-    uint8_t iv[16];
-    uint8_t randomseed[16] = {0x00, 0x00, 0x00, 0x00,
-                              0x00, 0x00, 0x00, 0x00,
-                              0x00, 0x00, 0x00, 0x00,
-                              0x00, 0x00, 0x00, 0x00};
-    //uint8_t buf[1024];
-    struct login_response login_rsp;
-    //struct handshake_response handshake_rsp;
     
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) {
@@ -464,27 +480,31 @@ static int connect_device()
     if(hello_rsp.length != sizeof(hello_rsp))
         fprintf(stderr, "Invalid hello response packet size\n");
     
+    if(verbose) {
+        fprintf(stderr, "Seed: ");
+        for(i=0;i<sizeof(hello_rsp.seed);i++)
+            fprintf(stderr, "%02x ", ((uint8_t*)&hello_rsp.seed)[i]);
+        fprintf(stderr,"\n");
+    }
+    memcpy(seed, hello_rsp.seed, sizeof(seed));
     /* AES init */
     
     handshake_req.length = sizeof(handshake_req);
     handshake_req.type = HANDSHAKE_REQ;
-    memcpy(handshake_req.seed, hello_rsp.seed, sizeof(hello_rsp.seed));
-    //memcpy(handshake_req.key, public_key, sizeof(public_key));
-    //AES_set_encrypt_key(randomseed, sizeof(randomseed)*8, &enc_key);
-    //AES_cbc_encrypt(public_key, handshake_req.key, sizeof(public_key), &enc_key, hello_rsp.seed, AES_ENCRYPT);
     
+    memcpy(handshake_req.seed, seed, sizeof(seed));
     
+    if(getrandom(randomseed, 16, 0) != 16) {
+        fprintf(stderr, "Error: cannot get random\n");
+        return _EXIT_SOCKET;
+    }
     RSA * rsa = createRSA(PUBLIC_KEY, 1);
     ret = RSA_public_encrypt(sizeof(randomseed),randomseed, handshake_req.key, rsa, RSA_PKCS1_OAEP_PADDING);
     if(ret != 256) {
         fprintf(stderr, "encrypt failed %d\n", ret);
         return _EXIT_SOCKET;
     }
-    //memcpy(handshake_req.key, seed_crypted, sizeof(seed_crypted));
-    int i;
-    /*for(i=0;i<sizeof(handshake_req.key);i++)
-		printf("%02x", ((uint8_t*)&handshake_req.key)[i]);
-	printf("\n");*/
+    
     if (verbose) fprintf(stderr, "Sending Handshake\n");
     
     ret = write(sockfd, &handshake_req, sizeof(handshake_req));
@@ -492,39 +512,111 @@ static int connect_device()
         fprintf(stderr, "Error sending handshake, %s\n", strerror(errno));
         return _EXIT_SOCKET;
     }
-    /*ret = read(sockfd, (uint8_t*)&handshake_rsp, sizeof(handshake_rsp));
-    if (ret != sizeof(handshake_rsp)) {
-        fprintf(stderr, "Error reading handshake response, %s\n", strerror(errno));
-        return _EXIT_SOCKET;
-    }*/
-    
-    AES_KEY   dec_key;
-    AES_set_decrypt_key(randomseed, sizeof(randomseed)*8, &dec_key);
-    /*memcpy(iv, hello_rsp.seed, sizeof(iv));
-    AES_cbc_encrypt((uint8_t*)&handshake_rsp, (uint8_t*)&handshake_rsp, sizeof(handshake_rsp), &dec_key, iv, AES_DECRYPT);
-    if (verbose) fprintf(stderr, "handshake response %x, %x\n", handshake_rsp.unknown1, handshake_rsp.unknown2);*/
-    struct login_request login_req;
-    
-    login_req.length = sizeof(login_req);
+        
+    /*login_req.length = sizeof(login_req);
     login_req.type = LOGIN_REQ;
-    login_req.pass_code = 0x00;
+    login_req.pin_code = 0x00;
     login_req.magic_number = 0x00000201;
     strncpy((char*)login_req.account_id, cred, 64);
     strncpy((char*)login_req.app_label, "Playstation", 256);
     strncpy((char*)login_req.os_version, "4.4", 16);
-    strncpy((char*)login_req.model, "PS4 Waker", 16);
-    memset(login_req.pin_code, 0, 16);
-    //memcpy(login_req.pin_code, "3631326562326400", 16);
-    //strncpy((char*)login_req.pin_code, "612eb2d", 16);
+    strncpy((char*)login_req.model, "PS4-Wake 2", 16);
+    memset(login_req.pass_code, 0, 16);
+    //strncpy((char*)login_req.pass_code, "612eb2d", 16);
+    
     AES_KEY   enc_key;
     AES_set_encrypt_key(randomseed, sizeof(randomseed)*8, &enc_key);
-    memcpy(iv, hello_rsp.seed, sizeof(iv));
-    AES_cbc_encrypt((uint8_t*)&login_req, (uint8_t*)&login_req, sizeof(login_req), &enc_key, iv, AES_ENCRYPT);
+    memcpy(iv, seed, sizeof(iv));
+    AES_cbc_encrypt((uint8_t*)&login_req, (uint8_t*)&login_req, sizeof(login_req), &enc_key, iv, AES_ENCRYPT);*/
     
-    printf("Seed: ");
+   /*printf("Seed: ");
     for(i=0;i<sizeof(hello_rsp.seed);i++)
-		printf("%02x ", ((uint8_t*)&hello_rsp.seed)[i]);
-	printf("\n");
+        printf("%02x ", ((uint8_t*)&hello_rsp.seed)[i]);
+    printf("\n");*/
+    
+    /*if (verbose) fprintf(stderr, "Sending login\n");
+    
+    ret = write(sockfd, &login_req, sizeof(login_req));
+    if (ret != sizeof(login_req)) {
+        fprintf(stderr, "Error sending login, %s\n", strerror(errno));
+        return _EXIT_SOCKET;
+    }
+    
+    ret = read(sockfd, (uint8_t*)&login_rsp, sizeof(login_rsp));
+    if (ret <=0) {
+        fprintf(stderr, "Error reading login response, %s\n", strerror(errno));
+        return _EXIT_SOCKET;
+    }*/
+
+    /*AES_set_decrypt_key(randomseed, sizeof(randomseed)*8, &dec_key);
+    memcpy(iv, seed, sizeof(iv));
+    AES_cbc_encrypt((uint8_t*)&login_rsp, (uint8_t*)&login_rsp, sizeof(login_rsp), &dec_key, iv, AES_DECRYPT);
+    
+    if(login_rsp.length != sizeof(login_rsp))
+        fprintf(stderr, "Invalid login response size\n");
+    if(login_rsp.type != LOGIN_RSP)
+        fprintf(stderr, "Invalid login response type\n");
+    
+    switch(login_rsp.status)
+    {
+        case LOGIN_SUCCESS:
+            fprintf(stderr, "login success\n");
+        break;
+        case PASSCODE_NEEDED:
+            fprintf(stderr, "passcode needed\n");
+            return _EXIT_NOUSERCRED;
+        case PIN_NEEDED:
+            fprintf(stderr, "pincode needed\n");
+            return _EXIT_NOUSERCRED;
+        case PIN_INVALID:
+            fprintf(stderr, "pincode invalid?\n");
+            return _EXIT_NOUSERCRED;
+        default:
+            fprintf(stderr, "Unknown error code 0x%x\n", login_rsp.status);
+            //return _EXIT_SOCKET;
+    }
+    
+    status_req.length = sizeof(status_req);
+    status_req.type = STATUS_REQ;
+    status_req.status = 0;
+    AES_set_encrypt_key(randomseed, sizeof(randomseed)*8, &enc_key);
+    memcpy(iv, seed, sizeof(iv));
+    AES_cbc_encrypt((uint8_t*)&status_req, (uint8_t*)&status_req, sizeof(status_req), &enc_key, iv, AES_ENCRYPT);
+    if (verbose) fprintf(stderr, "Sending status\n");
+    
+    ret = write(sockfd, &status_req, sizeof(status_req));
+    if (ret != sizeof(status_req)) {
+        fprintf(stderr, "Error sending status, %s\n", strerror(errno));
+        return _EXIT_SOCKET;
+    }*/
+    
+    return _EXIT_SUCCESS;
+}
+
+static int send_login()
+{
+    int ret;
+    uint8_t iv[16];
+    AES_KEY   enc_key;
+    AES_KEY   dec_key;
+    struct login_request login_req;
+    struct login_response login_rsp;
+    struct status_request status_req;
+    
+    login_req.length = sizeof(login_req);
+    login_req.type = LOGIN_REQ;
+    login_req.pin_code = 0x00;
+    login_req.magic_number = 0x00000201;
+    strncpy((char*)login_req.account_id, cred, 64);
+    strncpy((char*)login_req.app_label, "Playstation", 256);
+    strncpy((char*)login_req.os_version, "4.4", 16);
+    strncpy((char*)login_req.model, "PS4-Wake 2", 16);
+    memset(login_req.pass_code, 0, 16);
+    //strncpy((char*)login_req.pass_code, "612eb2d", 16);
+    
+    AES_set_encrypt_key(randomseed, sizeof(randomseed)*8, &enc_key);
+    memcpy(iv, seed, sizeof(iv));
+    AES_cbc_encrypt((uint8_t*)&login_req, (uint8_t*)&login_req, sizeof(login_req), &enc_key, iv, AES_ENCRYPT);
     
     if (verbose) fprintf(stderr, "Sending login\n");
     
@@ -539,40 +631,129 @@ static int connect_device()
         fprintf(stderr, "Error reading login response, %s\n", strerror(errno));
         return _EXIT_SOCKET;
     }
-    /*for(i=0;i<sizeof(login_rsp);i++)
-		printf("%02x", ((uint8_t*)&login_rsp)[i]);
-	printf("\n");*/
-    memcpy(iv, hello_rsp.seed, sizeof(iv));
+    
+    AES_set_decrypt_key(randomseed, sizeof(randomseed)*8, &dec_key);
+    memcpy(iv, seed, sizeof(iv));
     AES_cbc_encrypt((uint8_t*)&login_rsp, (uint8_t*)&login_rsp, sizeof(login_rsp), &dec_key, iv, AES_DECRYPT);
     
     if(login_rsp.length != sizeof(login_rsp))
-		fprintf(stderr, "Invalid login response size\n");
-	if(login_rsp.type != LOGIN_RSP)
-		fprintf(stderr, "Invalid login response type\n");
-	
-	switch(login_rsp.status)
-	{
-		case LOGIN_SUCCESS:
-			fprintf(stderr, "login success\n");
-		break;
-		case PASSCODE_NEEDED:
-			fprintf(stderr, "passcode needed\n");
-			return _EXIT_NOUSERCRED;
-		case PIN_NEEDED:
-			fprintf(stderr, "pincode needed\n");
-			return _EXIT_NOUSERCRED;
-		case PIN_INVALID:
-			fprintf(stderr, "pincode invalid?\n");
-			return _EXIT_NOUSERCRED;
-		default:
-			fprintf(stderr, "Unknown error code %x\n", login_rsp.status);
-			return _EXIT_SOCKET;
-	}
-    while(1)
+        fprintf(stderr, "Invalid login response size\n");
+    if(login_rsp.type != LOGIN_RSP)
+        fprintf(stderr, "Invalid login response type\n");
+    
+    switch(login_rsp.status)
     {
-		sleep(2);
-	}
+        case LOGIN_SUCCESS:
+            fprintf(stderr, "login success\n");
+        break;
+        case PASSCODE_NEEDED:
+            fprintf(stderr, "passcode needed\n");
+            return _EXIT_NOUSERCRED;
+        case PIN_NEEDED:
+            fprintf(stderr, "pincode needed\n");
+            return _EXIT_NOUSERCRED;
+        case PIN_INVALID:
+            fprintf(stderr, "pincode invalid?\n");
+            return _EXIT_NOUSERCRED;
+        default:
+            fprintf(stderr, "Unknown error code 0x%x\n", login_rsp.status);
+            //return _EXIT_SOCKET;
+    }
+    
+    status_req.length = sizeof(status_req);
+    status_req.type = STATUS_REQ;
+    status_req.status = 0;
+    AES_set_encrypt_key(randomseed, sizeof(randomseed)*8, &enc_key);
+    memcpy(iv, seed, sizeof(iv));
+    AES_cbc_encrypt((uint8_t*)&status_req, (uint8_t*)&status_req, sizeof(status_req), &enc_key, iv, AES_ENCRYPT);
+    if (verbose) fprintf(stderr, "Sending status\n");
+    
+    ret = write(sockfd, &status_req, sizeof(status_req));
+    if (ret != sizeof(status_req)) {
+        fprintf(stderr, "Error sending status, %s\n", strerror(errno));
+        return _EXIT_SOCKET;
+    }
+    
     return _EXIT_SUCCESS;
+}
+
+static int send_standby()
+{
+    int ret;
+    uint8_t iv[16];
+    AES_KEY   enc_key;
+    struct standby_request standby_req;
+    struct standby_response standby_rsp;
+    
+    
+    standby_req.length = 8;
+    standby_req.type = STANDBY_REQ;
+    memset(standby_req.dummy, 0, sizeof(standby_req.dummy));
+    
+    AES_set_encrypt_key(randomseed, sizeof(randomseed)*8, &enc_key);
+    memcpy(iv, seed, sizeof(iv));
+    AES_cbc_encrypt((uint8_t*)&standby_req, (uint8_t*)&standby_req, sizeof(standby_req), &enc_key, iv, AES_ENCRYPT);
+    if (verbose) fprintf(stderr, "Sending standby\n");
+    
+    ret = write(sockfd, &standby_req, sizeof(standby_req));
+    if (ret != sizeof(standby_req)) {
+        fprintf(stderr, "Error sending standby, %s\n", strerror(errno));
+        return _EXIT_SOCKET;
+    }
+    
+    ret = read(sockfd, (uint8_t*)&standby_rsp, sizeof(standby_rsp));
+    if (ret <=0) {
+        fprintf(stderr, "Error reading standby response, %s\n", strerror(errno));
+        return _EXIT_SOCKET;
+    }
+
+    
+    return _EXIT_SUCCESS;
+}
+
+int probe_device(int probes)
+{
+    ssize_t bytes;
+    socklen_t sock_size;
+    int i;
+    memset(reply, 0, sizeof(struct ddp_reply));
+    
+    sprintf(pkt_output,
+        "SRCH * HTTP/1.1\r\n"
+        "device - discovery - protocol - version:%s\r\n\r\n",
+        _DDP_VERSION);
+
+
+    if (verbose) fprintf(stderr, "Scanning");
+    
+    for (i = 0; i < probes; i++) {
+        sa_remote.sin_port = htons(port_remote);
+        bytes = sendto(sd, pkt_output, strlen(pkt_output), 0,
+            (struct sockaddr *)&sa_remote, sizeof(struct sockaddr_in));
+        if (bytes < 0) {
+            fprintf(stderr, "Error writing packet: %s\n", strerror(errno));
+            return -1;
+        }
+
+        sock_size = sizeof(struct sockaddr_in);
+        bytes = recvfrom(sd, pkt_input, page_size, 0,
+            (struct sockaddr *)&sa_remote, &sock_size);
+        if (bytes < 0) {
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                fprintf(stderr, "Error reading packet: %s\n", strerror(errno));
+                return -1;
+            }
+        }
+        else {
+            if (ddp_parse(pkt_input, reply) != 0) continue;
+            if (verbose) fputc('\r', stderr);
+            return 1;
+        }
+
+        if (verbose) fputc('.', stderr);
+    }
+    if (verbose) fputc('\r', stderr);
+    return 0;
 }
 
 int main(int argc, char *argv[])
@@ -580,7 +761,7 @@ int main(int argc, char *argv[])
     int ret = _EXIT_SUCCESS;
     atexit(onexit);
 
-    long page_size = getpagesize();
+    page_size = getpagesize();
     long buffer_size = page_size * 3;
 
     buffer = malloc(buffer_size);
@@ -594,6 +775,7 @@ int main(int argc, char *argv[])
     {
         { "probe", 2, 0, 'P' },
         { "wake", 1, 0, 'W' },
+        { "standby", 1, 0, 'S' },
         { "broadcast", 0, 0, 'B' },
         { "local-port", 1, 0, 'L' },
         { "remote-host", 1, 0, 'H' },
@@ -611,7 +793,7 @@ int main(int argc, char *argv[])
     for (optind = 1 ;; ) {
         int o = 0;
         if ((rc = getopt_long(argc, argv,
-            "PWBL:H:R:I:jvh?lc:", options, &o)) == -1) break;
+            "PWSBL:H:R:I:jvh?lc:", options, &o)) == -1) break;
         switch (rc) {
         case 'P':
             probe = 1;
@@ -621,6 +803,10 @@ int main(int argc, char *argv[])
             break;
         case 'W':
             wakeup = 1;
+            break;
+        case 'S':
+            standby = 1;
+            login = 1; /* must be logged in */
             break;
         case 'l':
             login = 1;
@@ -735,78 +921,47 @@ int main(int argc, char *argv[])
         return _EXIT_SOCKET;
     }
 
-    sprintf(pkt_output,
-        "SRCH * HTTP/1.1\r\n"
-        "device - discovery - protocol - version:%s\r\n\r\n",
-        _DDP_VERSION);
-
+    
     reply = malloc(sizeof(struct ddp_reply));
-    memset(reply, 0, sizeof(struct ddp_reply));
-
-    ssize_t bytes;
-    socklen_t sock_size;
-
-    if (verbose) fprintf(stderr, "Scanning");
+    
 
     int found_device = 0;
-    for (int i = 0; i < probes; i++) {
-        sa_remote.sin_port = htons(port_remote);
-        bytes = sendto(sd, pkt_output, strlen(pkt_output), 0,
-            (struct sockaddr *)&sa_remote, sizeof(struct sockaddr_in));
-        if (bytes < 0) {
-            fprintf(stderr, "Error writing packet: %s\n", strerror(errno));
-        }
 
-        sock_size = sizeof(struct sockaddr_in);
-        bytes = recvfrom(sd, pkt_input, page_size, 0,
-            (struct sockaddr *)&sa_remote, &sock_size);
-        if (bytes < 0) {
-            if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                fprintf(stderr, "Error reading packet: %s\n", strerror(errno));
-                return _EXIT_SOCKET;
-            }
-        }
-        else {
-            if (ddp_parse(pkt_input, reply) != 0) continue;
-            found_device = 1;
-            break;
-        }
-
-        if (verbose) fputc('.', stderr);
-    }
-
-    if (verbose) fputc('\r', stderr);
+    found_device = probe_device(_PROBES);
+    if(found_device < 0)
+        return _EXIT_SOCKET;
 
     if (!found_device) {
         fprintf(stderr, "No device found.\n");
         return _EXIT_DEVNOTFOUND;
     }
-    else {
-        fprintf(stderr, "Device found");
-        if (verbose) {
-            fprintf(stderr, ": %s(%s) [%s/%s]",
-                reply->host_name, inet_ntoa(sa_remote.sin_addr), reply->host_type, reply->host_id);
-            switch (reply->code) {
-            case 200:
-                if (reply->running_app_name != NULL) {
-                    fprintf(stderr, ": %s (%s)",
-                        reply->running_app_name, reply->running_app_titleid);
-                }
-                else fprintf(stderr, ": Home Screen");
-                break;
-            case 620:
-                fprintf(stderr, ": Standby");
-                break;
-            default:
-                fprintf(stderr, ": Unknown status (%hd)", reply->code);
-                break;
+    
+    fprintf(stderr, "Device found");
+    if (verbose) {
+        fprintf(stderr, ": %s(%s) [%s/%s]",
+            reply->host_name, inet_ntoa(sa_remote.sin_addr), reply->host_type, reply->host_id);
+        switch (reply->code) {
+        case 200:
+           wakeup = 0; /* no need to wakeup */
+            if (reply->running_app_name != NULL) {
+                fprintf(stderr, ": %s (%s)",
+                    reply->running_app_name, reply->running_app_titleid);
             }
+            else fprintf(stderr, ": Home Screen");
+            break;
+        case 620:
+            fprintf(stderr, ": Standby");
+            break;
+        default:
+            fprintf(stderr, ": Unknown status (%hd)", reply->code);
+            break;
         }
-        else fputc('.', stderr);
-        fputc('\n', stderr);
-
-        if (probe && json) json_output(reply);
     }
+    else fputc('.', stderr);
+    fputc('\n', stderr);
+    
+    if (probe && json) json_output(reply);
+    
 
     if (probe)
         return _EXIT_SUCCESS;
@@ -814,11 +969,19 @@ int main(int argc, char *argv[])
         ret = ddp_send("WAKEUP");
         if(ret != _EXIT_SUCCESS)
             return ret;
-        ret = ddp_send("LAUNCH");
+        
     }
     if(login) {
+        probe_device(30);
+        ret = ddp_send("LAUNCH");
         sleep(1);
         connect_device();
+        send_login();
+        sleep(1);
+    }
+    if(standby) {
+        send_standby();
+        sleep(1);
     }
     if(sockfd >= 0)
         close(sockfd);
