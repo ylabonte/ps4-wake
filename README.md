@@ -2,6 +2,8 @@ PlayStation 4 Discovery and Wake-up Utility
 ===========================================
 Copyright (C) 2014 Darryl Sokoloski <darryl@sokoloski.ca>
 
+Copyright (C) 2018 Fariouche <fariouche@yahoo.fr> for the additions (connect, login, suspend, start app)
+
 Requirements
 ------------
 In order to wake your PS4 remotely, the PS4 must be in Standby mode.  Check the power management settings to enable Standby mode.
@@ -16,39 +18,46 @@ An example capture using tcpdump:
 
 You'll be looking for a packet that looks like HTTP and contains the string 'user-credential:NNNNNNN'.  Remember the "user credential" number.
 
+You can use the ps4-waker nodejs application to fake a standby ps4 and retrieve the user credential.
+If something is not working, this is most likely a user credential problem. (it is a very long 64 characters string)
+
+Why not use the python or nodejs applications? Juste because they are way too big in size (30MB or 100MB juste to wakeup a ps4... this is overkill). ps4-wake juste takes 90KB and does not pull any dependency.
+
+
 Usage Overview
 --------------
 
-    Probe:
-     -P, --probe
-       Probe network for devices.
-
-    Wake:
-     -W, --wake <user-credential>
-       Wake device using specified user credential.
-
-    Options:
-     -B, --broadcast
-       Send broadcasts.
-
-     -L, --local-port <port address>
-       Specifiy a local port address.
-
-     -H, --remote-host <host address>
-       Specifiy a remote host address.
-
-     -R, --remote-port <port address>
-       Specifiy a remote port address (default: 987).
-
-     -I, --interface <interface>
-       Bind to interface.
-
-     -j, --json
-       Output JSON.
-
-     -v, --verbose
-       Enable verbose messages.
-
+     Probe:
+      -P, --probe
+        Probe network for devices.
+     
+     Wake:
+      -W, --wake
+        Wake device.
+     
+     Standby:
+      -S, --standby
+        put the device in standby mode.
+     
+     Options:
+      -c, --credential <user-credential>
+        use specified user credential (needed by wake and login).
+      -l, --login
+        login to the device.
+      -B, --broadcast
+        Send broadcasts.
+      -L, --local-port <port address>
+        Specifiy a local port address.
+      -H, --remote-host <host address>
+        Specifiy a remote host address.
+      -R, --remote-port <port address>
+        Specifiy a remote port address (default: 987).
+      -I, --interface <interface>
+        Bind to interface.
+      -j, --json
+        Output JSON.
+      -v, --verbose
+        Enable verbose messages.
 
 Examples
 --------
@@ -73,9 +82,19 @@ To wake-up your PS4 using 123456 as the "user credential":
     Or, direct:
     # ./ps4-wake -vW 123456 -H 192.168.1.10
 
+To wakeup and login and start an application:
+
+    # ./ps4-wake -vW -c <64 chars credential> -B -l -s <application ID>
+
+To retrieve the application id, start the application the normal way and execute:
+    
+    # ./ps4-wake -v -B -P
 
 To Do
 -----
 
 - Add support for multiple PS4 devices.
+- Add pin code support
+- Add pass code support
+
 
