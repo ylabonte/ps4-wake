@@ -670,10 +670,10 @@ static int send_standby()
     AES_cbc_encrypt((uint8_t*)&standby_rsp, (uint8_t*)&standby_rsp, sizeof(standby_rsp), &dec_key, ivd, AES_DECRYPT);
     
     if(standby_rsp.length != (sizeof(standby_rsp)-sizeof(standby_rsp.padding)))
-        fprintf(stderr, "Invalid app start response size %u\n", standby_rsp.length);
+        fprintf(stderr, "Invalid suspend response size %u\n", standby_rsp.length);
     
     if(standby_rsp.type != STANDBY_RSP)
-        fprintf(stderr, "Invalid app start response type %x\n", standby_rsp.type);
+        fprintf(stderr, "Invalid suspend response type %x\n", standby_rsp.type);
 
     if(standby_rsp.status != 0)
         fprintf(stderr, "cannot enter standby, error %u\n", standby_rsp.status);
