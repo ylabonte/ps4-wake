@@ -44,6 +44,8 @@ Usage Overview
         use specified user credential (needed by wake and login).
       -l, --login
         login to the device.
+      -p, --passcode
+        use passcode when login (must be used with login option).
       -B, --broadcast
         Send broadcasts.
       -L, --local-port <port address>
@@ -95,6 +97,5 @@ To Do
 
 - Add support for multiple PS4 devices.
 - Add pin code support
-- Add pass code support
 
 

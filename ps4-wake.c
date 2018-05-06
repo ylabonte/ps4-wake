@@ -41,7 +41,7 @@
 #include <sys/random.h>
 
 
-#define _VERSION            "1.0"
+#define _VERSION            "1.1"
 #define _DST_PORT           987
 #define _PROBES             6
 
@@ -389,9 +389,15 @@ void onexit(void)
     }
 }
 
+static void print_version()
+{
+    fprintf(stderr, "ps4-wake v%s\n", _VERSION);
+}
+
 static void usage(int rc)
 {
-    fprintf(stderr, "ps4-wake v%s Help\n", _VERSION);
+    fprintf(stderr, "Help\n");
+    print_version();
     fprintf(stderr, " Probe:\n");
     fprintf(stderr, "  -P, --probe\n    Probe network for devices.\n");
     fprintf(stderr, " Wake:\n");
@@ -401,6 +407,7 @@ static void usage(int rc)
     fprintf(stderr, " Options:\n");
     fprintf(stderr, "  -c, --credential <user-credential>\n    use specified user credential (needed by wake and login).\n");
     fprintf(stderr, "  -l, --login\n    login to the device.\n");
+    fprintf(stderr, "  -p, --passcode\n    use passcode when login (must be used with login option).\n");
     fprintf(stderr, "  -B, --broadcast\n    Send broadcasts.\n");
     fprintf(stderr, "  -L, --local-port <port address>\n    Specifiy a local port address.\n");
     fprintf(stderr, "  -H, --remote-host <host address>\n    Specifiy a remote host address.\n");
@@ -540,7 +547,7 @@ static int connect_device()
     return _EXIT_SUCCESS;
 }
 
-static int send_login()
+static int send_login(const char* passcode)
 {
     int ret;
     
@@ -558,8 +565,11 @@ static int send_login()
     strncpy((char*)login_req.app_label, "Playstation", 256);
     strncpy((char*)login_req.os_version, "4.4", 16);
     strncpy((char*)login_req.model, "PS4-Wake 2", 16);
-    memset(login_req.pass_code, 0, 16);
-    //strncpy((char*)login_req.pass_code, "612eb2d", 16);
+    if(passcode)
+        strncpy((char*)login_req.pass_code, passcode, 16);
+    else
+        memset(login_req.pass_code, 0, 16);
+    
     
     AES_set_encrypt_key(randomseed, sizeof(randomseed)*8, &enc_key);
     memcpy(ive, seed, sizeof(ive));
@@ -774,7 +784,8 @@ static int probe_device(int probes, int device_state)
 
 int main(int argc, char *argv[])
 {
-	char* app_id = NULL;
+    char* app_id = NULL;
+    char* passcode = NULL;
     int ret = _EXIT_SUCCESS;
     atexit(onexit);
 
@@ -804,6 +815,7 @@ int main(int argc, char *argv[])
         { "login", 0, 0, 'l' },
         { "start", 1, 0, 's' },
         { "credential", 0, 0, 'c' },
+        { "passcode", 0, 0, 'p' },
         { "version", 0, 0, 'V' },
 
         { NULL, 0, 0, 0 }
@@ -812,7 +824,7 @@ int main(int argc, char *argv[])
     for (optind = 1 ;; ) {
         int o = 0;
         if ((rc = getopt_long(argc, argv,
-            "PWSBL:H:R:I:jvh?lc:s:V", options, &o)) == -1) break;
+            "PWSBL:H:R:I:jvh?lc:s:Vp:", options, &o)) == -1) break;
         switch (rc) {
         case 'P':
             probe = 1;
@@ -849,6 +861,14 @@ int main(int argc, char *argv[])
             app_id = strdup(optarg);
             login = 1;
             break;
+        case 'p':
+            if(strlen(optarg) > 16)
+            {
+                fprintf(stderr, "Invalid passcode\n");
+                return _EXIT_BADOPTION;
+            }
+            passcode = strdup(optarg);
+            break;
         case 'j':
             json = 1;
             break;
@@ -860,7 +880,7 @@ int main(int argc, char *argv[])
                 "Try %s --help for more information.\n", argv[0]);
             return _EXIT_BADOPTION;
         case 'V':
-            fprintf(stderr, "%s version 1.1\n", argv[0]);
+            print_version();
             return _EXIT_SUCCESS;
         case 'h':
             usage(0);
@@ -883,6 +903,10 @@ int main(int argc, char *argv[])
         return _EXIT_BADHOSTADDR;
     }
 
+    if (!login && passcode != NULL) {
+        fprintf(stderr, "passcode must be used with login option\n");
+        return _EXIT_BADOPTION;
+    }
     //struct sockaddr_in sa_local, sa_remote;
 
     memset(&sa_local, 0, sizeof(struct sockaddr_in));
@@ -1002,7 +1026,7 @@ int main(int argc, char *argv[])
         ret = ddp_send("LAUNCH");
         sleep(1);
         connect_device();
-        send_login();
+        send_login(passcode);
         sleep(1);
     }
     if(app_id) {
@@ -1017,6 +1041,8 @@ int main(int argc, char *argv[])
         close(sockfd);
     if(app_id)
         free(app_id);
+    if(passcode)
+        free(passcode);  
     return ret;
 }
 
