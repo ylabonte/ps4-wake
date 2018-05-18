@@ -4,6 +4,8 @@ Copyright (C) 2014 Darryl Sokoloski <darryl@sokoloski.ca>
 
 Copyright (C) 2018 Fariouche <fariouche@yahoo.fr> for the additions (connect, login, suspend, start app)
 
+Thanks to @dhleong, maintainer of ps4-waker (https://github.com/dhleong/ps4-waker), where all the protocol stuff was inspired from
+
 Requirements
 ------------
 In order to wake your PS4 remotely, the PS4 must be in Standby mode.  Check the power management settings to enable Standby mode.
