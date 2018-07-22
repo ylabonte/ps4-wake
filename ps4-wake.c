@@ -1022,7 +1022,7 @@ int main(int argc, char *argv[])
         
     }
     if(login) {
-        probe_device(40, 200);
+        probe_device(50, 200);
         ret = ddp_send("LAUNCH");
         sleep(1);
         connect_device();
