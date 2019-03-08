@@ -38,7 +38,8 @@
 #include <openssl/rsa.h>
 #include <openssl/aes.h>
 
-#include <sys/random.h>
+#include <sys/syscall.h>
+#include <linux/random.h>
 
 
 #define _VERSION            "1.1"
@@ -525,7 +526,7 @@ static int connect_device()
     
     memcpy(handshake_req.seed, seed, sizeof(seed));
     
-    if(getrandom(randomseed, 16, 0) != 16) {
+    if(syscall(SYS_getrandom, randomseed, 16, 0) != 16) {
         fprintf(stderr, "Error: cannot get random\n");
         return _EXIT_SOCKET;
     }
