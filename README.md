@@ -4,11 +4,22 @@ Copyright (C) 2014 Darryl Sokoloski <darryl@sokoloski.ca>
 
 Copyright (C) 2018 Fariouche <fariouche@yahoo.fr> for the additions (connect, login, suspend, start app)
 
-Thanks to @dhleong, maintainer of ps4-waker (https://github.com/dhleong/ps4-waker), where all the protocol stuff was inspired from
+Thanks to @dhleong, maintainer of ps4-waker (https://github.com/dhleong/ps4-waker), where all the protocol stuff was inspired from.
+
+
+Build & Install
+---------------
+You can build and install the binary using the following command chains.
+
+    # aclocal && autoheader && automake --add-missing && autoconf
+    # ./configure && make && sudo make install
+
+Successfully built and run this way on Raspberry Pi with _Raspbian GNU/Linux 9 (stretch)_.
+
 
 Requirements
 ------------
-In order to wake your PS4 remotely, the PS4 must be in Standby mode.  Check the power management settings to enable Standby mode.
+In order to wake your PS4 remotely, the PS4 must be in Standby mode. Check the power management settings to enable Standby mode.
 
 If you just wish to see the current status of your PS4, you do not require a "user credential" number.
 
@@ -65,7 +76,6 @@ Usage Overview
 
 Examples
 --------
-
 To search your whole network for a PS4:
 
     # ./ps4-wake -vP -B
@@ -78,13 +88,13 @@ To send a probe directly to the PS4 using it's IPv4 address, 192.168.1.10 for ex
 
     # ./ps4-wake -vP -H 192.168.1.10
 
-To wake-up your PS4 using 123456 as the "user credential":
+To wake-up your PS4 using your 64 chars "user credential" string:
 
     Via broadcast:
-    # ./ps4-wake -vW 123456 -B
+    # ./ps4-wake -vW -c <64 chars credential> -B
 
     Or, direct:
-    # ./ps4-wake -vW 123456 -H 192.168.1.10
+    # ./ps4-wake -vW -c <64 chars credential> -H 192.168.1.10
 
 To wakeup and login and start an application:
 
@@ -93,11 +103,4 @@ To wakeup and login and start an application:
 To retrieve the application id, start the application the normal way and execute:
     
     # ./ps4-wake -v -B -P
-
-To Do
------
-
-- Add support for multiple PS4 devices.
-- Add pin code support
-
 
