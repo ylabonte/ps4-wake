@@ -71,6 +71,8 @@
 #define STATUS_REQ 0x14
 #define STANDBY_REQ 0x1a
 #define STANDBY_RSP 0x1b
+#define SENDKEY_REQ 0x1c
+#define SENDKEY_RSP 0x12
 
 #define LOGIN_SUCCESS 0x00
 #define PASSCODE_NEEDED 0x14
@@ -202,6 +204,22 @@ struct app_request
 
 
 struct app_response
+{
+    uint32_t length;
+    uint32_t type;
+    uint32_t status;
+    uint32_t padding;
+};
+
+struct sendkey_request
+{
+    uint32_t length;
+    uint32_t type;
+    uint32_t keycode;
+    uint32_t hold_time;
+};
+
+struct sendkey_response
 {
     uint32_t length;
     uint32_t type;
@@ -408,6 +426,7 @@ static void usage(int rc)
     fprintf(stderr, " Options:\n");
     fprintf(stderr, "  -c, --credential <user-credential>\n    use specified user credential (needed by wake and login).\n");
     fprintf(stderr, "  -l, --login\n    login to the device.\n");
+    fprintf(stderr, "  -k, --sendkey <keycode>\n    send keycode to the device.\n");
     fprintf(stderr, "  -p, --passcode\n    use passcode when login (must be used with login option).\n");
     fprintf(stderr, "  -B, --broadcast\n    Send broadcasts.\n");
     fprintf(stderr, "  -L, --local-port <port address>\n    Specifiy a local port address.\n");
@@ -732,6 +751,71 @@ static int start_app(const char* app_id)
     return _EXIT_SUCCESS;
 }
 
+/*
+    UP: 1,
+    DOWN: 2,
+    RIGHT: 4,
+    LEFT: 8,
+    ENTER: 16,
+    BACK: 32,
+    OPTION: 64,
+    PS: 128,
+    KEY_OFF: 256,
+    CANCEL: 512,
+    CLOSE_RC: 2048,
+    OPEN_RC: 1024
+*/
+static int send_key(uint32_t keycode)
+{
+    int ret;
+    AES_KEY   enc_key;
+    AES_KEY   dec_key;
+    struct sendkey_request sendkey_req;
+    struct sendkey_response sendkey_rsp;
+    
+    
+    sendkey_req.length = sizeof(sendkey_req);
+    sendkey_req.type = SENDKEY_REQ;
+    sendkey_req.keycode = keycode;
+    sendkey_req.hold_time = 0;
+    //memset(sendkey_req.padding, 0, sizeof(sendkey_req.padding));
+    
+    AES_set_encrypt_key(randomseed, sizeof(randomseed)*8, &enc_key);
+    //memcpy(iv, seed, sizeof(iv));
+    AES_cbc_encrypt((uint8_t*)&sendkey_req, (uint8_t*)&sendkey_req, sizeof(sendkey_req), &enc_key, ive, AES_ENCRYPT);
+    if (verbose) fprintf(stderr, "Sending sendkey(%u)\n", keycode);
+    
+    ret = write(sockfd, &sendkey_req, sizeof(sendkey_req));
+    if (ret != sizeof(sendkey_req)) {
+        fprintf(stderr, "Error sending sendkey, %s\n", strerror(errno));
+        return _EXIT_SOCKET;
+    }
+    if(keycode != 2048)
+        return _EXIT_SUCCESS;
+    ret = read(sockfd, (uint8_t*)&sendkey_rsp, sizeof(sendkey_rsp));
+    if (ret <=0) {
+        fprintf(stderr, "Error reading standby response, %s\n", strerror(errno));
+        return _EXIT_SOCKET;
+    }
+    
+    AES_set_decrypt_key(randomseed, sizeof(randomseed)*8, &dec_key);
+    AES_cbc_encrypt((uint8_t*)&sendkey_rsp, (uint8_t*)&sendkey_rsp, sizeof(sendkey_rsp), &dec_key, ivd, AES_DECRYPT);
+    
+    if(sendkey_rsp.length != (sizeof(sendkey_rsp)-sizeof(sendkey_rsp.padding)))
+        fprintf(stderr, "Invalid sendkey response size %u\n", sendkey_rsp.length);
+    
+    if(sendkey_rsp.type != SENDKEY_RSP)
+        fprintf(stderr, "Invalid sendkey response type %x\n", sendkey_rsp.type);
+
+    if(sendkey_rsp.status != 0)
+        fprintf(stderr, "sendkey error %u\n", sendkey_rsp.status);
+    else
+        fprintf(stderr, "ok\n");
+
+    
+    return _EXIT_SUCCESS;
+}
+
 static int probe_device(int probes, int device_state)
 {
     ssize_t bytes;
@@ -785,6 +869,7 @@ static int probe_device(int probes, int device_state)
 
 int main(int argc, char *argv[])
 {
+    uint32_t keycode = 0;
     char* app_id = NULL;
     char* passcode = NULL;
     int ret = _EXIT_SUCCESS;
@@ -815,6 +900,7 @@ int main(int argc, char *argv[])
         { "help", 0, 0, 'h' },
         { "login", 0, 0, 'l' },
         { "start", 1, 0, 's' },
+        { "sendkey", 1, 0, 'k' },
         { "credential", 0, 0, 'c' },
         { "passcode", 0, 0, 'p' },
         { "version", 0, 0, 'V' },
@@ -825,7 +911,7 @@ int main(int argc, char *argv[])
     for (optind = 1 ;; ) {
         int o = 0;
         if ((rc = getopt_long(argc, argv,
-            "PWSBL:H:R:I:jvh?lc:s:Vp:", options, &o)) == -1) break;
+            "PWSBL:H:R:I:jvh?lc:s:k:Vp:", options, &o)) == -1) break;
         switch (rc) {
         case 'P':
             probe = 1;
@@ -857,6 +943,9 @@ int main(int argc, char *argv[])
             break;
         case 'I':
             iface = strdup(optarg);
+            break;
+        case 'k':
+            keycode = atoi(optarg);
             break;
         case 's':
             app_id = strdup(optarg);
@@ -1025,13 +1114,22 @@ int main(int argc, char *argv[])
     if(login) {
         probe_device(50, 200);
         ret = ddp_send("LAUNCH");
-        sleep(1);
+        sleep(2);
         connect_device();
         send_login(passcode);
-        sleep(1);
+        sleep(2);
     }
     if(app_id) {
         start_app(app_id);
+        sleep(1);
+    }
+    if(keycode) {
+		send_key(1024);
+		usleep(200*1000);
+        send_key(keycode);
+        send_key(256);
+        usleep(200*1000);
+        send_key(2048);
         sleep(1);
     }
     if(standby) {
